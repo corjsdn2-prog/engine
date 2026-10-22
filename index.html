@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>스팀펑크 엔진</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#12161A; --panel:#1A2026; --rule:#2B343D; --rule-hi:#3D4A56;
+    --text:#C4CCD3; --dim:#7A868F; --brass:#C08A3E; --brass-dim:#7A5726;
+    --warn:#B8563F; --ok:#5E8F6E;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden;background:var(--ink);color:var(--text);
+    font-family:'IBM Plex Sans KR',system-ui,sans-serif;font-size:14px;line-height:1.5}
+  #app{display:flex;height:100%}
+  #view{flex:1;position:relative;min-width:0}
+  canvas{display:block;width:100%;height:100%}
+
+  #rail{width:310px;flex:none;background:var(--panel);border-right:1px solid var(--rule);
+    overflow-y:auto;padding:22px 20px 32px;display:flex;flex-direction:column;gap:26px}
+  h1{font-size:15px;font-weight:600;letter-spacing:-.01em}
+  h1 span{display:block;font-size:12px;font-weight:400;color:var(--dim);margin-top:3px}
+
+  .grp{display:flex;flex-direction:column;gap:11px}
+  .grp>h2{font-size:12px;font-weight:500;color:var(--dim);
+    padding-bottom:7px;border-bottom:1px solid var(--rule)}
+
+  .ctl{display:flex;flex-direction:column;gap:6px}
+  .ctl .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .ctl label{font-size:13px}
+  .ctl output{font-family:'IBM Plex Mono',monospace;font-size:12px;
+    font-variant-numeric:tabular-nums;color:var(--brass)}
+
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:22px;
+    background:transparent;cursor:ew-resize}
+  input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--rule-hi)}
+  input[type=range]::-moz-range-track{height:2px;background:var(--rule-hi)}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:3px;height:18px;
+    background:var(--brass);margin-top:-8px;border-radius:0}
+  input[type=range]::-moz-range-thumb{width:3px;height:18px;background:var(--brass);
+    border:0;border-radius:0}
+  input[type=range]:focus-visible{outline:2px solid var(--brass);outline-offset:3px}
+
+  /* 분해 타임라인 — 각 계층이 언제 움직이는지 슬라이더 아래 직접 표시 */
+  #bands{width:100%;height:104px;display:block;margin-top:2px}
+
+  .row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;
+    padding:3px 0;border-bottom:1px solid rgba(43,52,61,.55)}
+  .row:last-child{border-bottom:0}
+  .row b{font-weight:400;color:var(--dim)}
+  .row span{font-family:'IBM Plex Mono',monospace;font-variant-numeric:tabular-nums}
+
+  .chk{display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px}
+  .chk input{accent-color:var(--brass);width:14px;height:14px;cursor:pointer}
+
+  #status{position:absolute;inset:0;display:grid;place-items:center;padding:40px;
+    background:var(--ink);text-align:center;transition:opacity .35s}
+  #status.gone{opacity:0;pointer-events:none}
+  #status .box{max-width:430px}
+  #status h3{font-size:16px;font-weight:600;margin-bottom:10px}
+  #status p{color:var(--dim);font-size:13.5px}
+  #status code{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--brass)}
+  .bad h3{color:var(--warn)}
+
+  #hint{position:absolute;left:18px;bottom:16px;font-size:12px;color:var(--dim)}
+  .camBtn{width:100%;padding:9px 10px;background:var(--brass-dim);color:#F1E6CE;border:0;
+    font-size:13px;font-family:inherit;cursor:pointer;letter-spacing:.01em}
+  .camBtn:hover{background:var(--brass)}
+  .camBtn.on{background:var(--ok)}
+  .camHelp{font-size:12px;color:var(--dim);margin:2px 0 0;line-height:1.4}
+  .camPreview{position:absolute;inset:0;overflow:hidden;z-index:5;pointer-events:none}
+  .camPreview[hidden]{display:none}
+  /* 영상은 인식 입력으로만 사용하고, 손 골격만 엔진 위에 표시한다. */
+  #cam-video{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+  #cam-skel{position:absolute;inset:0;width:100%;height:100%}
+  .camGuideBox{display:none}
+  .camPreviewLabel{position:absolute;left:50%;bottom:24px;transform:translateX(-50%);
+    max-width:calc(100% - 32px);padding:8px 16px;border:1px solid rgba(43,52,61,.15);
+    border-radius:20px;background:rgba(255,255,255,.88);color:#34413B;
+    font-size:12px;text-align:center;pointer-events:none}
+  @media (prefers-reduced-motion:reduce){#status{transition:none}}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="rail">
+    <h1>스팀펑크 엔진<span>손으로 조립·해체</span></h1>
+
+    <div class="grp">
+      <h2>손 인식</h2>
+      <button id="cam-toggle" class="camBtn">카메라로 제어 시작</button>
+      <p class="camHelp">엔진 위에 표시되는 손 골격을 보며 조작하세요. 주먹을 쥐면 결합되어 회전하고, 펼치면 분해됩니다.</p>
+      <p class="camHelp">손바닥(손가락 끝)이 카메라를 향하게 해주세요 — 주먹을 쥐면 손등만 보여 인식이 잘 안 될 수 있어요.</p>
+      <div class="row"><b>상태</b><span id="cam-status">꺼짐</span></div>
+      <div class="row"><b>제스처</b><span id="hand-gesture">—</span></div>
+    </div>
+
+    <div class="grp">
+      <h2>제어 <span id="ctl-note" style="font-weight:400;color:var(--dim)"></span></h2>
+      <div class="ctl">
+        <div class="top"><label for="s-open">분해도 openness</label><output id="o-open">0.00</output></div>
+        <input type="range" id="s-open" min="0" max="1" step="0.005" value="0">
+        <canvas id="bands"></canvas>
+      </div>
+      <div class="ctl">
+        <div class="top"><label for="s-scale">분해 폭 (부품이 흩어지는 거리)</label><output id="o-scale">2.00</output></div>
+        <input type="range" id="s-scale" min="0.5" max="3" step="0.05" value="2">
+      </div>
+      <div class="ctl">
+        <div class="top"><label for="s-rpm">회전 속도</label><output id="o-rpm">2.60</output></div>
+        <input type="range" id="s-rpm" min="0" max="8" step="0.05" value="2.6">
+      </div>
+    </div>
+
+    <div class="grp">
+      <h2>상태</h2>
+      <div class="row"><b>스핀 게이트</b><span id="r-gate">1.000</span></div>
+      <div class="row"><b>크랭크 위상 θ</b><span id="r-theta">0.00</span></div>
+      <div class="row"><b>활성 계층</b><span id="r-layer">—</span></div>
+      
+    </div>
+
+    <div class="grp">
+      <h2>이식 검사</h2>
+      <div class="row"><b>GLB 노드</b><span id="r-nodes">—</span></div>
+      <div class="row"><b>분해 규칙 연결</b><span id="r-exp">—</span></div>
+      <div class="row"><b>운동학 연결</b><span id="r-kin">—</span></div>
+      <div class="row"><b>회전 연결</b><span id="r-spin">—</span></div>
+      <div class="row"><b>미매칭</b><span id="r-miss">—</span></div>
+    </div>
+
+    <div class="grp">
+      <h2>보기</h2>
+      <label class="chk"><input type="checkbox" id="c-drift" checked> 유휴 카메라 드리프트</label>
+      <label class="chk"><input type="checkbox" id="c-frame"> 분해 시 자동으로 뒤로 빼기 (손 거리와 섞임)</label>
+      <label class="chk"><input type="checkbox" id="c-cycle"> 0↔1 자동 왕복 (가역성 확인)</label>
+    </div>
+  </aside>
+
+  <div id="view">
+    <div id="status"><div class="box">
+      <h3>불러오는 중</h3><p><code>engine.glb</code> 읽는 중입니다.</p>
+    </div></div>
+    <div id="hint">드래그로 회전 · 휠로 확대</div>
+<div id="cam-preview" class="camPreview" hidden>
+  <video id="cam-video" playsinline muted></video>
+  <canvas id="cam-skel"></canvas>
+  <div id="cam-guide" class="camGuideBox"></div>
+  <div id="cam-preview-label" class="camPreviewLabel">엔진 위로 손을 움직여보세요</div>
+</div>
+  </div>
+</div>
+
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.164.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.164.0/examples/jsm/",
+  "@mediapipe/tasks-vision":"https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs"
+}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {HandLandmarker, FilesetResolver} from '@mediapipe/tasks-vision';
+import {EffectComposer} from 'three/addons/postprocessing/EffectComposer.js';
+import {RenderPass} from 'three/addons/postprocessing/RenderPass.js';
+import {SSAOPass} from 'three/addons/postprocessing/SSAOPass.js';
+import {UnrealBloomPass} from 'three/addons/postprocessing/UnrealBloomPass.js';
+import {OutputPass} from 'three/addons/postprocessing/OutputPass.js';
+
+/* ── Blender에서 뽑은 규칙 표 ─────────────────────────────────────
+   EXPLODE: 부품 → [Dx, Dy, Dz, t0, w]
+     오프셋 = D * explode_scale * smoothstep((openness − t0)/w)
+   KIN:  location 축별 표현식 (크랭크 위상 a의 함수)
+   SPIN: rotation_euler 축별 표현식
+   좌표계는 Blender Z-up 그대로. GLB도 export_yup=False로 내보냄. */
+
+const EXPLODE={"alternator":[0.3474,-3.4629,0.9205,0.0512,0.26],"bedplate":[0.0,0.0,-2.3595,0.68,0.26],"bellhousing":[-1.23,0.0,0.0,0.42,0.28],"cam_A_ex":[0.0,-1.9943,1.6682,0.3,0.28],"cam_A_in":[0.0,-1.6682,1.9943,0.3,0.28],"cam_B_ex":[0.0,1.6682,1.9943,0.3,0.28],"cam_B_in":[0.0,1.9943,1.6682,0.3,0.28],"coolant_pipe_A":[0.022,-3.8385,1.7046,0.0,0.259],"coolant_pipe_B":[0.022,3.8385,1.7046,0.0,0.259],"crank":[0.0,0.0,-1.6573,0.8,0.2],"dipstick":[0.3137,3.9323,1.4417,0.0,0.2418],"drum_tank":[0.3985,0.0,-3.5779,0.0588,0.26],"exhaust_A":[-0.0894,-3.1983,0.0555,0.1904,0.28],"exhaust_B":[-0.0894,3.1983,0.0555,0.1904,0.28],"flywheel":[-1.5325,0.0,0.0,0.5,0.28],"fuel_lines":[-0.0153,0.2326,4.1935,0.0011,0.26],"fuel_rail_A":[0.0,-1.2425,4.012,0.0,0.26],"fuel_rail_B":[0.0,1.2425,4.012,0.0,0.26],"giant_flywheel":[2.8905,0.0,0.0,0.44,0.28],"governor":[-0.1969,0.0,3.5946,0.1085,0.26],"head_A":[0.0,-1.5556,1.5556,0.42,0.28],"head_B":[0.0,1.5556,1.5556,0.42,0.28],"head_gasket_A":[0.0,-0.6222,0.6222,0.5,0.28],"head_gasket_B":[0.0,0.6222,0.6222,0.5,0.28],"ign_wires":[-0.0398,0.0,4.1998,0.004,0.26],"intake_manifold":[0.0,0.0,3.2,0.18,0.28],"intake_rail_A":[0.0,-0.6559,3.1321,0.18,0.28],"intake_rail_B":[0.0,0.6559,3.1321,0.18,0.28],"linkage_arm":[-0.0145,-3.4439,1.0484,0.0812,0.26],"main_caps":[0.0,0.0,-2.1995,0.74,0.26],"oil_filter":[0.3541,-3.2157,-1.5792,0.0576,0.26],"oil_lines":[0.3482,-3.8555,-1.6291,0.0,0.2424],"oil_pan":[0.0,0.0,-2.6195,0.62,0.26],"oil_pump":[0.4668,1.587,-3.1974,0.0527,0.26],"pin_A0":[-0.737,-1.6515,1.6515,0.6064,0.28],"pin_A1":[-0.5466,-1.6669,1.6669,0.5888,0.28],"pin_A2":[-0.3534,-1.6669,1.6669,0.5712,0.28],"pin_A3":[-0.163,-1.6515,1.6515,0.5536,0.28],"pin_B0":[0.163,1.6515,1.6515,0.6064,0.28],"pin_B1":[0.3534,1.6669,1.6669,0.5888,0.28],"pin_B2":[0.5466,1.6669,1.6669,0.5712,0.28],"pin_B3":[0.737,1.6515,1.6515,0.5536,0.28],"piston_A0":[-0.287,-1.3996,1.3996,0.5864,0.28],"piston_A1":[-0.0966,-1.4126,1.4126,0.5688,0.28],"piston_A2":[0.0966,-1.4126,1.4126,0.5512,0.28],"piston_A3":[0.287,-1.3996,1.3996,0.5336,0.28],"piston_B0":[-0.287,1.3996,1.3996,0.5864,0.28],"piston_B1":[-0.0966,1.4126,1.4126,0.5688,0.28],"piston_B2":[0.0966,1.4126,1.4126,0.5512,0.28],"piston_B3":[0.287,1.3996,1.3996,0.5336,0.28],"plug_bosses_A":[0.0298,-1.9183,1.7548,0.2945,0.28],"plug_bosses_B":[0.0298,1.9183,1.7548,0.2945,0.28],"pulley":[2.468,0.0,0.0,0.38,0.28],"rod_A0":[-0.287,-0.8678,0.8678,0.6364,0.28],"rod_A1":[-0.0966,-0.8758,0.8758,0.6188,0.28],"rod_A2":[0.0966,-0.8758,0.8758,0.6012,0.28],"rod_A3":[0.287,-0.8678,0.8678,0.5836,0.28],"rod_B0":[-0.287,0.8678,0.8678,0.6364,0.28],"rod_B1":[-0.0966,0.8758,0.8758,0.6188,0.28],"rod_B2":[0.0966,0.8758,0.8758,0.6012,0.28],"rod_B3":[0.287,0.8678,0.8678,0.5836,0.28],"side_plate":[-0.1668,-3.5273,-0.7004,0.0891,0.26],"stack_A0":[-0.3,-0.6559,3.1321,0.18,0.28],"stack_A1":[-0.1,-0.6559,3.1321,0.192,0.28],"stack_A2":[0.1,-0.6559,3.1321,0.204,0.28],"stack_A3":[0.3,-0.6559,3.1321,0.216,0.28],"stack_B0":[-0.3,0.6559,3.1321,0.18,0.28],"stack_B1":[-0.1,0.6559,3.1321,0.192,0.28],"stack_B2":[0.1,0.6559,3.1321,0.204,0.28],"stack_B3":[0.3,0.6559,3.1321,0.216,0.28],"starter":[-0.5132,-2.8398,-2.1523,0.1112,0.26],"steam_pipes":[-0.0155,-2.52,-3.36,0.0007,0.26],"throttle_link_A":[0.0035,-0.7214,4.1376,0.0,0.2597],"throttle_link_B":[0.0035,0.7214,4.1376,0.0,0.2597],"timing_cover":[1.8805,0.0,0.0,0.3,0.28],"timing_drive":[2.1855,0.0,0.0,0.34,0.28],"turbo_A":[-0.099,-3.0366,1.0045,0.1922,0.28],"turbo_B":[-0.099,3.0366,1.0045,0.1922,0.28],"valve_cover_A":[0.0,-1.8385,1.8385,0.3,0.28],"valve_cover_B":[0.0,1.8385,1.8385,0.3,0.28],"valvetrain_A":[0.0,-1.0112,1.0112,0.36,0.28],"valvetrain_B":[0.0,1.0112,1.0112,0.36,0.28],"water_pump":[1.3655,0.0,0.0,0.044,0.26]};
+
+// 보어축 왕복 — 뱅크 A는 −Y, 뱅크 B는 +Y. ph = 스로우위상 + 뱅크각
+const S=0.70711, CR=0.55, L2=1.3225;      // cos45, 크랭크반경, 로드길이²
+const bore=(a,ph)=>CR*Math.cos(a+ph)+Math.sqrt(L2-Math.pow(CR*Math.sin(a+ph),2));
+const PH_A=[0.785398,3.926991,2.356194,5.497787];   // 뱅크A 유효위상
+const PH_B=[-0.785398,2.356194,0.785398,3.926991];  // 뱅크B 유효위상
+const THROW=[0,3.141593,1.570796,4.712389];         // 크랭크핀 스로우 위상
+const KIN={}, SPIN={};
+for(let i=0;i<4;i++){
+  for(const [b,ph,sgn,beta] of [['A',PH_A[i],-1,0.785398],['B',PH_B[i],+1,-0.785398]]){
+    const f=a=>bore(a,ph);
+    KIN[`piston_${b}${i}`]=KIN[`pin_${b}${i}`]={1:a=>sgn*S*f(a), 2:a=>S*f(a)};
+    KIN[`rod_${b}${i}`]={1:a=>CR*Math.sin(a+THROW[i]), 2:a=>CR*Math.cos(a+THROW[i])};
+    SPIN[`rod_${b}${i}`]={0:a=>beta+Math.asin(0.478261*Math.sin(a+ph))};
+  }
+}
+for(const n of ['crank','flywheel','giant_flywheel','pulley']) SPIN[n]={0:a=>-a};
+for(const n of ['cam_A_in','cam_A_ex','cam_B_in','cam_B_ex']) SPIN[n]={0:a=>-0.5*a};
+SPIN['governor']={2:a=>2.4*a};
+
+// 흡기 맥동 — 나팔관 8개가 각자 실린더의 흡기 행정에 맞춰 오르내린다.
+// 점화순서 1-8-4-3-6-5-7-2 (크로스플레인 V8)를 뱅크A=1,3,5,7 / 뱅크B=2,4,6,8 에 대응.
+// 사이클이 크랭크 2회전(4π)이므로 cos(a/2)를 쓰고, 음수 구간을 잘라 흡기 1회만 남긴다.
+const FIRE={A0:0,B3:1,B1:2,A1:3,B2:4,A2:5,A3:6,B0:7}, AMP=0.22;
+for(const b of ['A','B']){
+  const sy = (b==='A' ? -1 : 1);
+  // 리프트는 보어축(45°)이 아니라 나팔관 자체 축(수직에서 15°) 방향이어야 틈이 안 생긴다
+  const baseY = sy*0.4, baseZ = 1.78, boreY = sy*0.2588, boreZ = 0.9659;
+  for(let i=0;i<4;i++){
+    const psi = -FIRE[b+i]*Math.PI/4;
+    const lift = a => AMP*Math.pow(Math.max(0,Math.cos(0.5*a+psi)),2);
+    KIN[`stack_${b}${i}`] = {1:a=>baseY+boreY*lift(a), 2:a=>baseZ+boreZ*lift(a)};
+  }
+}
+
+// 슬라이더 아래 타임라인용 계층 구간
+const LAYERS=[
+  ['배선·배관',0,0.26],['보조기계',0.04,0.37],['흡배기',0.18,0.47],
+  ['밸브계',0.29,0.64],['타이밍계',0.30,0.72],['헤드·후단',0.42,0.78],
+  ['왕복계',0.53,0.92],['하부',0.62,1.00]
+];
+
+const smoothstep=(t0,w,o)=>{const u=Math.max(0,Math.min(1,(o-t0)/w));return u*u*(3-2*u);};
+const spinGate=o=>1-smoothstep(0,0.18,o);   // 회전이 멎은 뒤에만 왕복계가 뽑힌다
+const R0=8.04, R1=13.82;                    // Blender 실측 바운딩 반경
+const CAM_DIST_MULT = 2.0*(0.24*Math.pow(9.5,0.5));  // 이전 손거리 슬라이더의 중간값(0.5) 고정
+
+/* ── MediaPipe 손 인식 ──────────────────────────────────────────
+   공식은 handoff.md §1 / 초기 스펙 §4 그대로:
+     openness_raw   = mean(fingertip~wrist 거리) / dist(wrist, middle_MCP)
+     handProximity  = handSizeRaw 재사용 (카메라 줌에도 동일하게 씀)
+   openness의 캘리브레이션 구간 [0.95, 2.45]→[0,1]은 문서에 명시된 값을 그대로 씀.
+   손 크기(근접도) 캘리브레이션 구간은 문서에 수치가 없어 화면 비율 기준으로 추정한 값이며,
+   실사용 시 카메라 화각/거리에 따라 CAL_SIZE 두 상수만 조정하면 됨. */
+const CAL_OPEN_SEED=[0.95,2.45];  // 첫 프레임들에 쓰는 시드값 — 이후 실제 관측 범위로 자동 수렴
+let openCalMin=CAL_OPEN_SEED[0], openCalMax=CAL_OPEN_SEED[1];
+const RPM_MAX=8;                  // sRpm 슬라이더 max와 맞춤
+
+// 사람마다 손가락/손바닥 비율이 달라 고정 구간으로는 다른 손에서 주먹이 0까지, 편손이 1까지
+// 안 닿는 문제가 생김. 관측된 극값 쪽으로는 빠르게, 반대쪽으로는 느리게 흘러가도록 해서
+// 몇 초 안에 그 사람 손 범위로 스스로 맞춰지게 한다(순간 이상치 하나에 영구히 고정되지 않도록).
+function adaptOpenCal(raw){
+  openCalMin += (raw - openCalMin) * (raw < openCalMin ? 0.9 : 0.01);
+  openCalMax += (raw - openCalMax) * (raw > openCalMax ? 0.9 : 0.01);
+  if(openCalMax - openCalMin < 0.25) openCalMax = openCalMin + 0.25;  // 붕괴 방지 최소폭
+}
+const clamp01=v=>Math.max(0,Math.min(1,v));
+const remap=(v,[lo,hi])=>clamp01((v-lo)/(hi-lo));
+const LERP=0.16;
+
+let hl=null, camSession=0, camRunning=false, camStream=null;
+let openSmooth=0, yawSmooth=0, pitchSmooth=0, lastHandSeen=0;
+
+function dist2(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+function sub3(a,b){ return {x:a.x-b.x, y:a.y-b.y, z:a.z-b.z}; }
+function cross3(a,b){ return {x:a.y*b.z-a.z*b.y, y:a.z*b.x-a.x*b.z, z:a.x*b.y-a.y*b.x}; }
+function norm3(v){ const l=Math.hypot(v.x,v.y,v.z)||1e-6; return {x:v.x/l,y:v.y/l,z:v.z/l}; }
+
+function computeFromLandmarks(lm, world){
+  const wrist=lm[0], mcp=lm[9];               // middle_MCP
+  const tips=[4,8,12,16,20].map(i=>lm[i]);
+  const denom=dist2(wrist,mcp) || 1e-4;
+  const openRaw = tips.reduce((s,t)=>s+dist2(wrist,t),0)/tips.length/denom;
+
+  // 손바닥 법선 = cross(wrist→index_MCP, wrist→pinky_MCP). worldLandmarks(미터 단위, 손목 기준
+  // 상대좌표)가 있으면 그걸 쓰고, 없으면 화면 좌표로 대체.
+  const src = world || lm;
+  const w=src[0], idx=src[5], pinky=src[17];
+  const n = norm3(cross3(sub3(idx,w), sub3(pinky,w)));
+  const yaw   = Math.atan2(n.x, -n.z);          // 좌우로 뒤집으면 손 회전과 엔진 회전이 같은 방향
+  const pitch = Math.atan2(-n.y, Math.hypot(n.x,n.z));
+  return {openRaw, yaw, pitch};                 // openness는 detectLoop에서 적응형 캘리브레이션으로 계산
+}
+
+async function startHandTracking(){
+  const mySession = ++camSession;              // 중복 인식 루프 가드
+  openCalMin=CAL_OPEN_SEED[0]; openCalMax=CAL_OPEN_SEED[1];   // 새로 켤 때마다 시드로 리셋 — 사람이 바뀌었을 수 있으므로
+  camStatus.textContent='카메라 권한 요청 중…';
+  try{
+    camStream = await navigator.mediaDevices.getUserMedia({video:{width:320,height:240,facingMode:'user'}});
+  }catch(e){
+    camStatus.textContent='카메라 권한 거부됨';
+    fail('카메라를 열지 못했습니다', String(e && e.message || e) +
+      '<br>이 페이지가 iframe(샌드박스) 안에서 열려 있다면 최상위 사이트(Netlify Drop 등)로 배포한 뒤 다시 시도하세요.');
+    return;
+  }
+  video.srcObject = camStream;
+  await video.play();
+  camPreview.hidden = false;
+
+  camStatus.textContent='모델 불러오는 중…';
+  try{
+    const fileset = await FilesetResolver.forVisionTasks(
+      'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    hl = await HandLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:
+        'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task' },
+      runningMode:'VIDEO', numHands:1,
+    });
+  }catch(e){
+    camStatus.textContent='모델 로드 실패';
+    fail('손 인식 모델을 불러오지 못했습니다', String(e && e.message || e));
+    return;
+  }
+
+  if(mySession !== camSession) { hl.close(); return; }  // 그 사이 중지/재시작됐으면 이 인스턴스는 폐기
+  camRunning = true;
+  camBtn.textContent='카메라 끄기'; camBtn.classList.add('on');
+  ctlNote.textContent='(카메라가 덮어씀)';
+  sOpen.disabled = sRpm.disabled = cCycle.disabled = true;
+  detectLoop(mySession);
+}
+
+// MediaPipe 21점 손 골격의 표준 연결선
+const HAND_LINKS=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],
+  [9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+// 카메라 비율을 유지한 contain 매핑. 화면 중앙의 손은 엔진 중앙에 겹친다.
+function drawSkeleton(lm, ok){
+  const w=skelCanvas.clientWidth, h=skelCanvas.clientHeight;
+  const dpr=Math.min(window.devicePixelRatio||1,2);
+  if(skelCanvas.width!==Math.round(w*dpr)||skelCanvas.height!==Math.round(h*dpr)){
+    skelCanvas.width=Math.round(w*dpr); skelCanvas.height=Math.round(h*dpr);
+  }
+  skelCtx.setTransform(dpr,0,0,dpr,0,0);
+  skelCtx.clearRect(0,0,w,h);
+  if(!lm) return;
+  const vw=video.videoWidth||640, vh=video.videoHeight||480;
+  const scale=Math.min(w/vw,h/vh), dw=vw*scale, dh=vh*scale;
+  const ox=(w-dw)/2, oy=(h-dh)/2;
+  const points=lm.map(p=>({x:ox+(1-p.x)*dw,y:oy+p.y*dh}));
+  const color=ok?'#23866E':'#C06038';
+  skelCtx.lineCap='round'; skelCtx.lineJoin='round';
+  // 밝은 외곽선을 더해 금속 부품 위에서도 손의 형태를 구분한다.
+  for(const [stroke,width] of [['rgba(255,255,255,.85)',6],[color,2.5]]){
+    skelCtx.strokeStyle=stroke; skelCtx.lineWidth=width;
+    skelCtx.beginPath();
+    for(const [a,b] of HAND_LINKS){
+      skelCtx.moveTo(points[a].x,points[a].y);
+      skelCtx.lineTo(points[b].x,points[b].y);
+    }
+    skelCtx.stroke();
+  }
+  for(const [i,p] of points.entries()){
+    skelCtx.beginPath(); skelCtx.arc(p.x,p.y,[4,8,12,16,20].includes(i)?5:3.5,0,Math.PI*2);
+    skelCtx.fillStyle=color; skelCtx.fill();
+    skelCtx.strokeStyle='rgba(255,255,255,.95)'; skelCtx.lineWidth=1.5; skelCtx.stroke();
+  }
+}
+
+// 가이드 박스(화면비 22%~78%, 10%~90%) 대비 손 위치·크기를 판정해 문구로 알려준다
+function judgePlacement(lm){
+  let minX=1,maxX=0,minY=1,maxY=0;
+  for(const p of lm){ minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x); minY=Math.min(minY,p.y); maxY=Math.max(maxY,p.y); }
+  const cx=(minX+maxX)/2, cy=(minY+maxY)/2, size=Math.max(maxX-minX,maxY-minY);
+  if(size>0.62)               return {ok:false, msg:'너무 가까워요 — 조금 뒤로'};
+  if(size<0.16)               return {ok:false, msg:'너무 멀어요 — 조금 앞으로'};
+  if(cx<0.15||cx>0.85||cy<0.08||cy>0.92) return {ok:false, msg:'화면 중앙으로 옮겨주세요'};
+  return {ok:true, msg:'좋습니다'};
+}
+
+let detectErrStreak=0;
+
+// 열림 정도를 사람이 읽는 라벨로 — 경계에서 파르르 떨지 않도록 히스테리시스를 둔다
+let gestureLabel='—';
+function gestureFromOpenness(o){
+  if(o < 0.28){ gestureLabel='주먹 (회전 가능)'; }
+  else if(o > 0.62){ gestureLabel='펼침 (분해)'; }
+  else if(gestureLabel==='—'){ gestureLabel='중간'; }
+  return gestureLabel;
+}
+
+function detectLoop(mySession){
+  if(mySession !== camSession || !camRunning) return;  // 세션이 바뀌었으면 조용히 종료
+  try{
+    if(video.readyState >= 2){
+      const res = hl.detectForVideo(video, performance.now());
+      if(res.landmarks && res.landmarks.length){
+        const lm0 = res.landmarks[0];
+        const wl = res.worldLandmarks && res.worldLandmarks[0];
+        const {openRaw, yaw, pitch} = computeFromLandmarks(lm0, wl);
+        adaptOpenCal(openRaw);
+        const openness = remap(openRaw, [openCalMin, openCalMax]);
+        const place = judgePlacement(lm0);
+        openSmooth  += (openness - openSmooth) * LERP;
+        yawSmooth   += (yaw   - yawSmooth)   * LERP;
+        pitchSmooth += (pitch - pitchSmooth) * LERP;
+        lastHandSeen = performance.now();
+        sOpen.value = openSmooth.toFixed(4);
+        // 주먹을 꽉 쥘수록(openSmooth→0) 빨리 돈다. 이미 lerp 0.16으로 스무딩된 값을 그대로
+        // 재사용하므로 별도 움직임 추적이 필요 없고, 흔들기 방식 때 겪은 회전 간섭도 없다.
+        sRpm.value = (RPM_MAX*(1-openSmooth)).toFixed(3);
+        rig.rotation.y = yawSmooth;
+        rig.rotation.x = Math.max(-0.9, Math.min(0.9, pitchSmooth));
+        camStatus.textContent='손 인식됨';
+        handGesture.textContent = gestureFromOpenness(openSmooth);
+        drawSkeleton(lm0, place.ok);
+        guideBox.classList.toggle('good', place.ok);
+        guideBox.classList.toggle('bad', !place.ok);
+        previewLabel.textContent = place.ok ? '손 인식 중 · 주먹으로 조립 · 펼쳐서 분해' : place.msg;
+      } else {
+        const gone = performance.now()-lastHandSeen>600;
+        camStatus.textContent = gone ? '손 없음 (마지막 값 유지)' : '손 인식됨';
+        if(gone){
+          handGesture.textContent='—';
+          drawSkeleton(null,false);
+          guideBox.classList.remove('good','bad');
+          previewLabel.textContent='손이 안 보여요 — 카메라를 향해 손을 보여주세요';
+        }
+      }
+    } else {
+      camStatus.textContent='영상 대기 중… (' + video.readyState + ')';
+    }
+    detectErrStreak=0;
+  } catch(e){
+    // 프레임 하나가 깨져도 루프 자체는 절대 죽으면 안 된다 — 여기서 못 잡으면
+    // requestAnimationFrame 재호출이 안 걸려서 "갑자기 인식 안 됨"으로 영구히 멈춘다.
+    detectErrStreak++;
+    console.error('손 인식 프레임 오류:', e);
+    camStatus.textContent = '인식 오류 재시도 중 (' + detectErrStreak + ') — 콘솔 확인';
+    if(detectErrStreak > 90){   // 약 1.5초 이상 연속 실패 — 스트림 자체가 죽은 것으로 판단
+      camStatus.textContent = '카메라 스트림이 끊겼습니다 — 껐다 다시 켜주세요';
+      stopHandTracking();
+      return;
+    }
+  }
+  requestAnimationFrame(()=>detectLoop(mySession));
+}
+
+function stopHandTracking(){
+  camSession++;                                 // 진행 중인 detectLoop/init을 전부 무효화
+  camRunning = false;
+  if(hl){ hl.close(); hl=null; }                 // 반드시 close — 안 하면 리소스 누수
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
+  video.srcObject = null;
+  camPreview.hidden = true;
+  camBtn.textContent='카메라로 제어 시작'; camBtn.classList.remove('on');
+  camStatus.textContent='꺼짐'; ctlNote.textContent=''; handGesture.textContent='—';
+  guideBox.classList.remove('good','bad'); previewLabel.textContent='엔진 위로 손을 움직여보세요';
+  skelCtx.setTransform(1,0,0,1,0,0);
+  skelCtx.clearRect(0,0,skelCanvas.width,skelCanvas.height);
+  sOpen.disabled = sRpm.disabled = cCycle.disabled = false;
+}
+
+
+
+/* ── 씬 ─────────────────────────────────────────────────────── */
+const view=document.getElementById('view');
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.outputColorSpace=THREE.SRGBColorSpace;
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.4;
+view.appendChild(renderer.domElement);
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0xFFFFFF);   // 배경은 항상 흰색 — HDRI는 반사에만 쓴다
+// 안개는 배경색과 맞춰야 지평선이 어색하지 않다
+scene.fog=new THREE.Fog(0xFFFFFF,60,150);
+
+// scene.environment ≠ scene.background : 전자는 반사·조명, 후자는 눈에 보이는 배경.
+// 절차적 스튜디오 룸을 PMREM으로 구워 반사 전용 환경맵으로만 사용한다.
+const pmrem=new THREE.PMREMGenerator(renderer);
+scene.environment=pmrem.fromScene(new RoomEnvironment(),0.02).texture;  // 블러 축소 = 더 또렷하고 밝은 반사
+
+const camera=new THREE.PerspectiveCamera(42,1,0.02,400);
+const rig=new THREE.Group();          // 손/마우스가 돌리는 것은 이 그룹 — 엔진 자체가 돈다
+scene.add(rig);
+const root=new THREE.Group();
+root.rotation.x=-Math.PI/2;          // Blender Z-up → three Y-up (rig 안쪽, 고정)
+rig.add(root);
+
+// environment(RoomEnvironment)가 주 조명을 맡으므로 직접광은 보조로만 약하게
+scene.add(new THREE.HemisphereLight(0xffffff,0xe8e2d6,0.55));
+const key=new THREE.DirectionalLight(0xfff2dd,0.9); key.position.set(9,14,7); scene.add(key);
+key.castShadow=true;
+key.shadow.mapSize.set(2048,2048);
+key.shadow.camera.left=-16; key.shadow.camera.right=16;
+key.shadow.camera.top=16; key.shadow.camera.bottom=-16;
+key.shadow.camera.near=1; key.shadow.camera.far=40;
+key.shadow.bias=-0.0015; key.shadow.normalBias=0.02;
+const rim=new THREE.DirectionalLight(0xffffff,0.6); rim.position.set(0,-6,12); scene.add(rim);
+
+// 접지 그림자 캐처 — 바닥색을 칠하지 않고 그림자만 흰 배경 위에 얹는다(제품샷 기법)
+const ground=new THREE.Mesh(
+  new THREE.PlaneGeometry(120,120),
+  new THREE.ShadowMaterial({opacity:0.32}));
+ground.rotation.x=-Math.PI/2;
+ground.position.y=-R1*1.02;    // 완전분해 상태에서도 절대 지오메트리와 겹치지 않는 하한선
+ground.receiveShadow=true;
+scene.add(ground);
+
+// 재질은 Phase F. 형상 판독만 되는 중립 회색.
+// 금속이라도 부위마다 다른 가공을 거친다: 광택 단조, 헤어라인 무광, 주물, 배선용 구리.
+// 하나의 재질로 통일하면 형태 구분이 안 되므로 기능별 팔레트로 변주를 준다.
+function gold(opts){
+  return new THREE.MeshPhysicalMaterial(Object.assign({
+    metalness:1.0, envMapIntensity:1.5, clearcoat:0.12, clearcoatRoughness:0.3,
+  }, opts));
+}
+const PALETTE = {
+  polished:  gold({color:0xF0C868, roughness:0.14, envMapIntensity:1.9}),           // 피스톤·핀 — 왕복 광택부
+  satin:     gold({color:0xD9B45C, roughness:0.30}),                                // 블록·헤드·밸브커버 — 주 외관
+  brushed:   gold({color:0xC7A855, roughness:0.46, clearcoat:0, anisotropy:0.55}), // 크랭크·플라이휠·풀리 — 헤어라인 가공
+  antique:   gold({color:0x9C7A3C, roughness:0.55, envMapIntensity:0.9, clearcoat:0}), // 로드·오일팬 등 저노출부 — 짙은 골동 톤
+  copper:    gold({color:0xC8703A, roughness:0.35, envMapIntensity:1.3}),           // 배선·배관류
+  dark:      gold({color:0x4A3A22, roughness:0.62, envMapIntensity:0.7, clearcoat:0}), // 개스킷·터빈 하우징 등 대비 포인트
+};
+function pickMaterial(name){
+  if(/^(piston_|pin_)/.test(name)) return PALETTE.polished;
+  if(/^(rod_|oil_pan|bedplate|main_caps|oil_filter|oil_lines|oil_pump)/.test(name)) return PALETTE.antique;
+  if(/^(crank$|flywheel|giant_flywheel|pulley|timing_)/.test(name)) return PALETTE.brushed;
+  if(/(pipe|wire|rail|line|link)/.test(name)) return PALETTE.copper;
+  if(/(gasket|turbo)/.test(name)) return PALETTE.dark;
+  return PALETTE.satin;   // block, head, valve_cover, intake, exhaust 등 주 외관
+}
+
+/* ── 엔진 회전(드래그/손 공용) — 카메라는 고정, 확대·거리 조작 없음 ─────── */
+const CAM_YAW=-0.52, CAM_PITCH=0.30;   // 3/4 히어로 앵글로 재조정. 상수이며 더 이상 바뀌지 않는다
+let drag=null;
+const el=renderer.domElement;
+el.addEventListener('pointerdown',e=>{drag={x:e.clientX,y:e.clientY};el.setPointerCapture(e.pointerId);});
+el.addEventListener('pointermove',e=>{
+  if(!drag || camRunning) return;      // 카메라 입력이 살아있으면 드래그가 값을 덮어쓰지 않게 함
+  rig.rotation.y -= (e.clientX-drag.x)*0.008;
+  rig.rotation.x = Math.max(-0.9, Math.min(0.9, rig.rotation.x + (e.clientY-drag.y)*0.008));
+  drag={x:e.clientX,y:e.clientY};
+});
+addEventListener('pointerup',()=>drag=null);
+
+/* ── 후처리 파이프라인 ──────────────────────────────────────── */
+const composer=new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene,camera));
+
+const ssao=new SSAOPass(scene,camera,1,1);
+ssao.kernelRadius=0.55;      // 부품 이음매·접촉면 근처만 살짝 어둡게 — 값이 크면 전체가 탁해짐
+ssao.minDistance=0.0004;
+ssao.maxDistance=0.03;
+composer.addPass(ssao);
+
+const bloom=new UnrealBloomPass(new THREE.Vector2(1,1), 0.35, 0.4, 0.86);
+// strength 0.35 / radius 0.4 / threshold 0.86 — 하이라이트만 살짝 번지게, 전체가 뿌예지지 않도록 임계값을 높게
+composer.addPass(bloom);
+
+composer.addPass(new OutputPass());  // 톤매핑·색공간 마무리는 composer 마지막 패스가 담당
+
+function resize(){
+  const w=view.clientWidth,h=view.clientHeight;
+  renderer.setSize(w,h);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  composer.setSize(w,h);
+  ssao.setSize(w,h);
+}
+addEventListener('resize',resize);
+
+/* ── UI ─────────────────────────────────────────────────────── */
+const $=id=>document.getElementById(id);
+const sOpen=$('s-open'), sScale=$('s-scale'), sRpm=$('s-rpm');
+const camBtn=$('cam-toggle'), camStatus=$('cam-status'), ctlNote=$('ctl-note'), video=$('cam-video'), handGesture=$('hand-gesture');
+const camPreview=$('cam-preview'), skelCanvas=$('cam-skel'), guideBox=$('cam-guide'), previewLabel=$('cam-preview-label');
+const skelCtx=skelCanvas.getContext('2d');
+camBtn.addEventListener('click', ()=> camRunning ? stopHandTracking() : startHandTracking());
+addEventListener('beforeunload', stopHandTracking);
+
+const cDrift=$('c-drift'), cFrame=$('c-frame'), cCycle=$('c-cycle');
+const bands=$('bands'), bx=bands.getContext('2d');
+
+function drawBands(o){
+  const dpr=Math.min(devicePixelRatio,2);
+  const w=bands.clientWidth, h=104;
+  if(bands.width!==w*dpr){bands.width=w*dpr;bands.height=h*dpr;}
+  bx.setTransform(dpr,0,0,dpr,0,0);
+  bx.clearRect(0,0,w,h);
+  const rowH=12, gap=1, padL=62;
+  const tw=w-padL;
+  bx.font='10px "IBM Plex Sans KR",sans-serif';
+  LAYERS.forEach((L,i)=>{
+    const y=i*(rowH+gap);
+    bx.fillStyle='#2B343D';
+    bx.fillRect(padL,y+4,tw,4);
+    const on=o>=L[1];
+    bx.fillStyle=on?'#C08A3E':'#3D4A56';
+    bx.fillRect(padL+L[1]*tw,y+4,(L[2]-L[1])*tw,4);
+    bx.fillStyle=on?'#C4CCD3':'#7A868F';
+    bx.textAlign='right'; bx.textBaseline='middle';
+    bx.fillText(L[0],padL-8,y+6);
+  });
+  const px=padL+o*tw;
+  bx.strokeStyle='#E8E2D6'; bx.lineWidth=1;
+  bx.beginPath(); bx.moveTo(px+.5,0); bx.lineTo(px+.5,LAYERS.length*(rowH+gap)); bx.stroke();
+}
+function activeLayer(o){
+  const hit=LAYERS.filter(L=>o>=L[1]&&o<=L[2]).map(L=>L[0]);
+  return hit.length?hit.join(', '):(o<=0?'조립':'분해 완료');
+}
+
+/* ── 로드 ───────────────────────────────────────────────────── */
+const parts=[];   // {obj, base:{p,r}, exp, kin, spin}
+const status=$('status');
+
+function fail(title, detail){
+  status.classList.remove('gone');
+  status.classList.add('bad');
+  status.querySelector('.box').innerHTML =
+    '<h3>'+title+'</h3><p>'+detail+'</p>';
+  console.error(title, detail);
+}
+
+function build(gltf){
+  // 먼저 전부 수집한 뒤에 부모를 옮긴다. traverse 도중 재부모화하면 노드가 건너뛰어진다.
+  const meshes=[];
+  gltf.scene.traverse(n=>{ if(n.isMesh) meshes.push(n); });
+
+  let nExp=0, nKin=0, nSpin=0; const miss=[];
+  for(const n of meshes){
+    n.material=pickMaterial(n.name);
+    n.castShadow=true; n.receiveShadow=true;
+    const nm=n.name;
+    const exp=EXPLODE[nm]||null, kin=KIN[nm]||null, spin=SPIN[nm]||null;
+    if(exp)nExp++; if(kin)nKin++; if(spin)nSpin++;
+    if(!exp&&!kin&&!spin&&!['block','boiler_tank','skid_base'].includes(nm)) miss.push(nm);
+    parts.push({obj:n,base:{p:n.position.clone(),r:n.rotation.clone()},exp,kin,spin});
+  }
+  // attach가 아니라 add — 로컬 변환을 그대로 둬야 Blender 좌표가 유지된다
+  for(const n of meshes) root.add(n);
+
+  // 정지 상태 바운딩 중심을 원점으로 끌어와 궤도 타깃을 맞춘다
+  root.updateMatrixWorld(true);
+  const bb=new THREE.Box3().setFromObject(root);
+  const c=bb.getCenter(new THREE.Vector3());
+  root.position.sub(c);
+
+  $('r-nodes').textContent=meshes.length;
+  $('r-exp').textContent=`${nExp} / ${Object.keys(EXPLODE).length}`;
+  $('r-kin').textContent=`${nKin} / ${Object.keys(KIN).length}`;
+  $('r-spin').textContent=`${nSpin} / ${Object.keys(SPIN).length}`;
+  const m=$('r-miss');
+  m.textContent=miss.length?miss.length:'없음';
+  m.style.color=miss.length?'var(--warn)':'var(--ok)';
+  if(miss.length) console.warn('규칙이 붙지 않은 노드:',miss);
+
+  status.classList.add('gone');
+  resize(); requestAnimationFrame(loop);
+}
+
+// 받기와 해석을 분리해야 어느 단계에서 깨졌는지 구분된다
+fetch('engine.glb')
+  .then(r=>{ if(!r.ok) throw new Error('HTTP '+r.status+' — 서버가 파일을 주지 않았습니다'); return r.arrayBuffer(); })
+  .then(buf=>new Promise((res,rej)=>new GLTFLoader().parse(buf,'',res,rej)))
+  .then(gltf=>{
+    try{ build(gltf); }
+    catch(e){ fail('GLB는 읽었지만 규칙 연결에서 오류', (e&&e.stack?e.stack:String(e))); }
+  })
+  .catch(e=>fail('engine.glb 로드 실패', String((e&&e.message)||e)));
+
+/* ── 루프 ───────────────────────────────────────────────────── */
+let theta=0, last=performance.now(), drift=0, cyc=0;
+
+function loop(now){
+  requestAnimationFrame(loop);
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+
+  if(cCycle.checked && !camRunning){ cyc+=dt*0.28; sOpen.value=(Math.sin(cyc)*0.5+0.5).toFixed(3); }
+  const o=+sOpen.value, k=+sScale.value, rpm=+sRpm.value;
+  const gate=spinGate(o);
+
+  // 위상 누산 — time·rpm·(1−openness)는 역회전 버그. 반드시 적분할 것.
+  theta+=rpm*gate*dt;
+
+  for(const p of parts){
+    p.obj.position.copy(p.base.p);
+    if(p.kin) for(const ax in p.kin) p.obj.position.setComponent(+ax,p.kin[ax](theta));
+    if(p.exp){
+      const [dx,dy,dz,t0,w]=p.exp;
+      // 계층별 이징 차등 — t0(늦게 움직일수록)에 비례해 더 묵직하게 감아 붙는 커브를 준다.
+      // 무거운 저부(t0 큼)는 더 완만하게, 가벼운 상부(t0 작음)는 더 경쾌하게. 새 데이터 없이
+      // 기존 t0만으로 결정되는 순수 함수라 §0 원칙(상태 누적 없음)에 그대로 부합한다.
+      const easePow=Math.max(0.55,Math.min(1.8, 1+(t0-0.3)*1.1));
+      const u=Math.max(0,Math.min(1,(o-t0)/w));
+      const ue=Math.pow(u,easePow);
+      const s=ue*ue*(3-2*ue)*k;
+      // 완전분해 근처에서 미세 유휴 흔들림 — 정지된 3D모델이 아니라 공중에 떠있는 느낌.
+      // 위상·주파수는 이 부품 고유의 D벡터에서 결정론적으로 유도(난수 없음, §0 원칙 유지).
+      const ph=((dx*13.7+dy*7.3+dz*5.1)%(Math.PI*2)+Math.PI*2)%(Math.PI*2);
+      const jAmp=0.02*k*u*u;
+      const t=now*0.001;
+      p.obj.position.x+=dx*s + jAmp*Math.sin(t*(0.9+ph%1*0.6)+ph);
+      p.obj.position.y+=dy*s + jAmp*Math.cos(t*(1.17+ph%1*0.6)+ph*1.3);
+      p.obj.position.z+=dz*s;
+    }
+    p.obj.rotation.copy(p.base.r);
+    if(p.spin) for(const ax in p.spin){
+      const v=p.spin[ax](theta);
+      if(ax==='0')p.obj.rotation.x=v; else if(ax==='1')p.obj.rotation.y=v; else p.obj.rotation.z=v;
+    }
+  }
+
+  // 확대·거리 조작 없음 — 카메라는 고정 각도·고정 배율. 유휴 드리프트는 엔진(rig) 자체를 돈다.
+  if(cDrift.checked && !drag && !camRunning) rig.rotation.y += dt*0.055;
+  const maxR=cFrame.checked?(R0+(R1-R0)*o):R1;
+  const dist=maxR*CAM_DIST_MULT;               // 고정 중간값. 손/휠로 바뀌지 않음
+  camera.position.set(
+    Math.cos(CAM_PITCH)*Math.sin(CAM_YAW)*dist,
+    Math.sin(CAM_PITCH)*dist,
+    Math.cos(CAM_PITCH)*Math.cos(CAM_YAW)*dist);
+  camera.lookAt(0,0,0);
+
+  $('o-open').textContent=o.toFixed(3);
+  $('o-scale').textContent=k.toFixed(2);
+  $('o-rpm').textContent=rpm.toFixed(2);
+  $('r-gate').textContent=gate.toFixed(3);
+  $('r-theta').textContent=(theta%(Math.PI*2)).toFixed(2);
+  $('r-layer').textContent=activeLayer(o);
+  drawBands(o);
+
+  composer.render(dt);
+}
+resize(); drawBands(0);
+</script>
+</body>
+</html>
